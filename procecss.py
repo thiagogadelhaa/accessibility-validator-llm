@@ -40,6 +40,25 @@ def parse_supplementary_info(supp_info: str) -> Tuple[List[str], str]:
 
     return images, text_context
 
+
+def extract_predicted_wcag(llm_output: str) -> Set[str]:
+    """
+    Extrai códigos numéricos WCAG da resposta livre (texto natural) do LLM.
+    Não utiliza ast.literal_eval para garantir tolerância a alucinações de formato.
+    """
+    try:
+        if not llm_output:
+            return set()
+            
+        # Busca direta em qualquer parte do texto retornando o padrão X.Y.Z
+        pattern = r"\b[1-4]\.\d+\.\d+\b"
+        matches = re.findall(pattern, str(llm_output))
+        return set(matches)
+        
+    except Exception as e:
+        logger.warning("failed_to_extract_prediction", output=str(llm_output), error=str(e))
+        return set()
+
 def extract_wcag_codes(wcag_string: str) -> Set[str]:
     """Extrai os códigos WCAG (ex: 1.1.1) da string bruta."""
     try:
@@ -53,3 +72,16 @@ def extract_wcag_codes(wcag_string: str) -> Set[str]:
     except Exception as e:
         logger.warning("failed_to_parse_wcag", wcag_string=wcag_string, error=str(e))
         return set()
+    
+def calculate_metrics():
+    df = pd.read_csv("./experiment_results/metrics_output.csv")
+
+    # Agrupamento e soma dos valores brutos
+    global_metrics = df.groupby(['model', 'strategy'])[['tp', 'fp', 'fn']].sum().reset_index()
+
+    
+    global_metrics['precision'] = global_metrics['tp'] / (global_metrics['tp'] + global_metrics['fp'])
+    global_metrics['recall'] = global_metrics['tp'] / (global_metrics['tp'] + global_metrics['fn'])
+    global_metrics['f1_score'] = (2 * global_metrics['precision'] * global_metrics['recall']) / (global_metrics['precision'] + global_metrics['recall'])
+
+    global_metrics.to_csv('./experiment_results/final_metrics.csv')
