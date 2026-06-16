@@ -3,10 +3,10 @@ from pathlib import Path
 from typing import Dict, Set, List
 import time
 
-import ollama
+from openai import OpenAI
 import pandas as pd
 
-from procecss import extract_wcag_codes, parse_supplementary_info, extract_predicted_wcag, calculate_metrics
+from procecss import extract_wcag_codes, parse_supplementary_info, extract_predicted_wcag, calculate_metrics, encode_image_for_opeanai
 from config import logger, CSV_PATH
 
 def calculate_advanced_metrics(ground_truth: Set[str], predictions: Set[str]) -> Dict[str, float]:
@@ -38,6 +38,7 @@ def init_csv_file(filepath: Path):
     """
     headers = [
         "item_id", "model", "strategy", "duration_ms", 
+        "prompt_tokens", "completion_tokens", "total_tokens",
         "tp", "fp", "fn", "precision", "recall", "f1_score", 
         "ground_truth", "predictions", "error"
     ]
@@ -54,7 +55,8 @@ def append_to_csv(filepath: Path, record: Dict):
     resiliência: se o script falhar, os dados processados até o momento estão salvos.
     """
     headers = [
-        "item_id", "model", "strategy", "duration_ms", 
+        "item_id", "model", "strategy", "duration_ms",
+        "prompt_tokens", "completion_tokens", "total_tokens",
         "tp", "fp", "fn", "precision", "recall", "f1_score", 
         "ground_truth", "predictions", "error"
     ]
@@ -82,7 +84,7 @@ def build_prompt_with_strategy(strategy: str, base_context: str) -> str:
 
 
 def run_evaluation(
-    client: ollama.Client,
+    client: OpenAI,
     item_id: str,
     ground_truth: Set[str],
     text_prompt: str,
@@ -109,35 +111,72 @@ def run_evaluation(
                 "model": model,
                 "strategy": strategy,
                 "duration_ms": 0,
+                "prompt_tokens": 0,       
+                "completion_tokens": 0,   
+                "total_tokens": 0,        
                 "tp": 0, "fp": 0, "fn": 0,
                 "precision": 0.0, "recall": 0.0, "f1_score": 0.0,
-                "ground_truth": "|".join(ground_truth), # Salva como string delimitada para não quebrar o CSV
+                "ground_truth": "|".join(ground_truth),
                 "predictions": "",
                 "error": ""
             }
             
             try:
-                response = client.generate(
-                    model=model,
-                    prompt=final_prompt,
-                    images=images,
+                content_payload = [{"type": "text", "text": final_prompt}]
+                
+                # Injeção dinâmica de imagens (se houver)
+                if images:
+                    for img_path in images:
+                        try:
+                            b64_data_uri = encode_image_for_opeanai(img_path)
+                            content_payload.append({
+                                "type": "image_url",
+                                "image_url": {"url": b64_data_uri}
+                            })
+                        except Exception as img_err:
+                            logger.warning("image_encoding_failed", path=img_path, error=str(img_err))
+                
+                # Chamada de API compatível com LM Studio
+                response = client.chat.completions.create(
+                    model=model, 
+                    messages=[
+                        {"role": "user", "content": content_payload}
+                    ],
+                    temperature=0.0, # Zero garante reproducibilidade máxima no experimento
                     stream=False
                 )
                 
                 duration_ms = int((time.perf_counter() - start_time) * 1000)
-                raw_output = response.get('response', '')
+                
+                # Extração da resposta no formato OpenAI
+                raw_output = response.choices[0].message.content
                 
                 predicted_codes = extract_predicted_wcag(raw_output) 
                 metrics = calculate_advanced_metrics(ground_truth, predicted_codes)
                 
-                # Atualiza o registro com sucesso
+                usage = getattr(response, 'usage', None)
+                prompt_tokens = getattr(usage, 'prompt_tokens', 0) if usage else 0
+                completion_tokens = getattr(usage, 'completion_tokens', 0) if usage else 0
+                total_tokens = getattr(usage, 'total_tokens', 0) if usage else 0
+                
                 record.update({
                     "duration_ms": duration_ms,
+                    "prompt_tokens": prompt_tokens,         
+                    "completion_tokens": completion_tokens, 
+                    "total_tokens": total_tokens,           
                     "predictions": "|".join(predicted_codes),
                     **metrics
                 })
                 
-                logger.info("inference_success", item_id=item_id, model=model, strategy=strategy, metrics=metrics)
+                logger.info(
+                    "inference_success", 
+                    item_id=item_id, 
+                    model=model, 
+                    strategy=strategy, 
+                    duration_ms=duration_ms,
+                    total_tokens=total_tokens,
+                    metrics=metrics
+                )
                 
             except Exception as e:
                 duration_ms = int((time.perf_counter() - start_time) * 1000)
@@ -157,7 +196,7 @@ def run_evaluation(
                 append_to_csv(RESULTS_CSV_PATH, record)
 
 
-def process_dataset(client: ollama.Client, models: List[str], strategies: List[str]):
+def process_dataset(client: OpenAI, models: List[str], strategies: List[str]):
     """
     Lê o dataset, prepara o payload de inferência e aciona o runner.
     Itera linha a linha para manter footprint de memória baixo.
@@ -222,13 +261,16 @@ def process_dataset(client: ollama.Client, models: List[str], strategies: List[s
 if __name__ == "__main__":
     logger.info("Iniciando o experimento...\n")
     
-    ollama_client = ollama.Client(host="http://localhost:11434")
+    lm_studio_client = OpenAI(
+        base_url="http://localhost:1234/v1", 
+        api_key="lm-studio"
+    )
     
-    MODELS_TO_TEST = ["gemma4:e2b"]
+    MODELS_TO_TEST = ["qwen2.5-coder"] 
     STRATEGIES_TO_TEST = ["zero-shot", "few-shot", "chain-of-thought"]
     
     process_dataset(
-        client=ollama_client,
+        client=lm_studio_client,
         models=MODELS_TO_TEST,
         strategies=STRATEGIES_TO_TEST
     )

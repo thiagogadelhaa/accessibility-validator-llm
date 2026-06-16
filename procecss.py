@@ -1,6 +1,9 @@
-import pandas as pd
 import ast
 import re
+import base64
+import mimetypes
+
+import pandas as pd
 from pathlib import Path
 from typing import Set, List, Tuple
 
@@ -72,7 +75,8 @@ def extract_wcag_codes(wcag_string: str) -> Set[str]:
     except Exception as e:
         logger.warning("failed_to_parse_wcag", wcag_string=wcag_string, error=str(e))
         return set()
-    
+
+
 def calculate_metrics():
     df = pd.read_csv("./experiment_results/metrics_output.csv")
 
@@ -85,3 +89,17 @@ def calculate_metrics():
     global_metrics['f1_score'] = (2 * global_metrics['precision'] * global_metrics['recall']) / (global_metrics['precision'] + global_metrics['recall'])
 
     global_metrics.to_csv('./experiment_results/final_metrics.csv')
+
+
+def encode_image_for_opeanai(image_path: str) -> str:
+    """
+    Lê uma imagem local e converte para o formato Data URI do padrão OpenAI.
+    """
+    with open(image_path, "rb") as image_file:
+        encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+        
+    mime_type, _ = mimetypes.guess_type(image_path)
+    if not mime_type:
+        mime_type = "image/jpeg"
+        
+    return f"data:{mime_type};base64,{encoded_string}"
