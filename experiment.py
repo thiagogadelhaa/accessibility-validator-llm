@@ -6,7 +6,7 @@ import time
 import ollama
 import pandas as pd
 
-from procecss import extract_wcag_codes, parse_supplementary_info
+from procecss import extract_wcag_codes, parse_supplementary_info, extract_predicted_wcag, calculate_metrics
 from config import logger, CSV_PATH
 
 def calculate_advanced_metrics(ground_truth: Set[str], predictions: Set[str]) -> Dict[str, float]:
@@ -80,6 +80,7 @@ def build_prompt_with_strategy(strategy: str, base_context: str) -> str:
     
     return f"{base_instruction}\n\n{base_context}"
 
+
 def run_evaluation(
     client: ollama.Client,
     item_id: str,
@@ -126,7 +127,7 @@ def run_evaluation(
                 duration_ms = int((time.perf_counter() - start_time) * 1000)
                 raw_output = response.get('response', '')
                 
-                predicted_codes = extract_wcag_codes(raw_output) 
+                predicted_codes = extract_predicted_wcag(raw_output) 
                 metrics = calculate_advanced_metrics(ground_truth, predicted_codes)
                 
                 # Atualiza o registro com sucesso
@@ -155,7 +156,8 @@ def run_evaluation(
                 # de sucesso (try) ou falha de rede/OOM (except).
                 append_to_csv(RESULTS_CSV_PATH, record)
 
-def process_dataset(client: str, models: List[str], strategies: List[str]):
+
+def process_dataset(client: ollama.Client, models: List[str], strategies: List[str]):
     """
     Lê o dataset, prepara o payload de inferência e aciona o runner.
     Itera linha a linha para manter footprint de memória baixo.
@@ -203,25 +205,26 @@ def process_dataset(client: str, models: List[str], strategies: List[str]):
             progress=f"{processed_count + 1}/{total_rows}"
         )
         
-        # run_evaluation(
-        #     client=client,
-        #     item_id=item_id,
-        #     ground_truth=ground_truth_codes,
-        #     text_prompt=prompt_payload,
-        #     images=image_paths,
-        #     models=models,
-        #     strategies=strategies
-        # )
+        run_evaluation(
+            client=client,
+            item_id=item_id,
+            ground_truth=ground_truth_codes,
+            text_prompt=prompt_payload,
+            images=image_paths,
+            models=models,
+            strategies=strategies
+        )
         
         processed_count += 1
 
     logger.info("dataset_ingestion_completed", total_processed=processed_count)
 
 if __name__ == "__main__":
-    #ollama_client = ollama.Client(host="http://localhost:11434")
-    ollama_client = " "
+    logger.info("Iniciando o experimento...\n")
     
-    MODELS_TO_TEST = ["llava:7b", "llava:13b", "qwen2-vl:7b"]
+    ollama_client = ollama.Client(host="http://localhost:11434")
+    
+    MODELS_TO_TEST = ["gemma4:e2b"]
     STRATEGIES_TO_TEST = ["zero-shot", "few-shot", "chain-of-thought"]
     
     process_dataset(
@@ -229,3 +232,5 @@ if __name__ == "__main__":
         models=MODELS_TO_TEST,
         strategies=STRATEGIES_TO_TEST
     )
+
+    calculate_metrics()
