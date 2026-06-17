@@ -6,7 +6,7 @@ import time
 from openai import OpenAI
 import pandas as pd
 
-from procecss import extract_wcag_codes, parse_supplementary_info, extract_predicted_wcag, calculate_metrics, encode_image_for_opeanai
+from procecss import extract_wcag_codes, parse_supplementary_info, extract_predicted_wcag, calculate_metrics, encode_image_for_opeanai, sanitize_html_for_llm
 from config import logger, CSV_PATH
 
 def calculate_advanced_metrics(ground_truth: Set[str], predictions: Set[str]) -> Dict[str, float]:
@@ -219,8 +219,12 @@ def process_dataset(client: OpenAI, models: List[str], strategies: List[str]):
     for index, row in df.iterrows():
         item_id = str(row['id'])
         wcag_raw = row.get('wcag_reference', '')
-        affected_elements = row.get('affected_html_elements', '')
-        supp_info_raw = row.get('supplementary_information', '')
+        raw_affected_elements = str(row.get('affected_html_elements', ''))
+        affected_elements = sanitize_html_for_llm(raw_affected_elements)
+        
+        
+        raw_supp_info = str(row.get('supplementary_information', ''))
+        supp_info_raw = sanitize_html_for_llm(raw_supp_info)
         
         ground_truth_codes = extract_wcag_codes(wcag_raw)
         

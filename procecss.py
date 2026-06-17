@@ -6,6 +6,7 @@ import mimetypes
 import pandas as pd
 from pathlib import Path
 from typing import Set, List, Tuple
+from bs4 import BeautifulSoup
 
 from config import logger, LOCAL_SCREENSHOTS_DIR
 
@@ -75,6 +76,43 @@ def extract_wcag_codes(wcag_string: str) -> Set[str]:
     except Exception as e:
         logger.warning("failed_to_parse_wcag", wcag_string=wcag_string, error=str(e))
         return set()
+
+
+def sanitize_html_for_llm(html_content: str) -> str:
+    """
+    Remove payloads pesados (Base64, Geometria SVG, Scripts) do HTML 
+    para economizar tokens, mantendo a integridade semântica para validação WCAG.
+    """
+    if not html_content or not isinstance(html_content, str):
+        return ""
+
+    
+    # Busca o padrão data:image/... e substitui o payload gigante por um placeholder.
+    b64_pattern = re.compile(r'(src|href)=["\']data:image\/[^;]+;base64,[a-zA-Z0-9+/=]+["\']')
+    html_content = b64_pattern.sub(r'\1="data:image/[REMOVIDO_PARA_ECONOMIA_DE_TOKENS]"', html_content)
+
+    try:
+        soup = BeautifulSoup(html_content, "html.parser")
+
+        
+        for svg in soup.find_all('svg'):
+            for geom in svg.find_all(['path', 'polygon', 'polyline', 'g', 'rect', 'circle', 'defs']):
+                geom.decompose()
+            
+            if not svg.string:
+                svg.append(soup.new_string(" "))
+
+        for tag in soup.find_all(['script', 'style', 'noscript']):
+            tag.decompose()
+
+        sanitized_html = str(soup)
+
+    except Exception as e:
+        logger.error("html_sanitization_failed", error=str(e))
+        # Fallback de segurança: retorna o HTML (com o Base64 removido pela regex)
+        sanitized_html = html_content
+    
+    return sanitized_html
 
 
 def calculate_metrics():
