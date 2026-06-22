@@ -68,7 +68,6 @@ def append_to_csv(filepath: Path, record: Dict):
 RESULTS_CSV_PATH = Path("./experiment_results/metrics_output.csv")
 
 def build_prompt_with_strategy(strategy: str, base_context: str) -> str:
-    # (Mantém a mesma implementação fornecida anteriormente)
     base_instruction = "Liste todas as violações de acessibilidade (WCAG) encontradas. Retorne APENAS os códigos das diretrizes (ex: 1.1.1, 1.3.1, 1.4.6)."
     
     if strategy == "zero-shot":

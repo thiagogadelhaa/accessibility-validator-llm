@@ -136,7 +136,37 @@ def calculate_metrics():
     # 4. Agrupamento e soma dos valores brutos sobre o dataset estabilizado
     global_metrics = clean_df.groupby(['model', 'strategy'])[['tp', 'fp', 'fn']].sum().reset_index()
 
-    # 5. Cálculo de Métricas com Segurança (Evita Divisão por Zero)
+    items_count = clean_df.groupby(['model', 'strategy']).size().reset_index(name='total_processed_items')
+    global_metrics = pd.merge(global_metrics, items_count, on=['model', 'strategy'])
+
+    TOTAL_WCAG_GUIDELINES = 112 
+
+    # O total de predições possíveis (N) é o número de itens processados * número de diretrizes
+    global_metrics['N_total'] = global_metrics['total_processed_items'] * TOTAL_WCAG_GUIDELINES
+
+    # Cálculo dos Verdadeiros Negativos (TN): Tudo o que o modelo ignorou corretamente
+    global_metrics['tn'] = global_metrics['N_total'] - (global_metrics['tp'] + global_metrics['fp'] + global_metrics['fn'])
+
+    # Acordo Observado (p_o): Frequência de concordância (Acertos Positivos + Acertos Negativos)
+    global_metrics['p_o'] = (global_metrics['tp'] + global_metrics['tn']) / global_metrics['N_total']
+
+    # Acordo Esperado ao Acaso (p_e):
+    p_gt_yes = (global_metrics['tp'] + global_metrics['fn']) / global_metrics['N_total']
+    p_gt_no = (global_metrics['tn'] + global_metrics['fp']) / global_metrics['N_total']
+    p_llm_yes = (global_metrics['tp'] + global_metrics['fp']) / global_metrics['N_total']
+    p_llm_no = (global_metrics['tn'] + global_metrics['fn']) / global_metrics['N_total']
+
+    # Probabilidade de concordarem puramente por estatística (sorte)
+    global_metrics['p_e'] = (p_gt_yes * p_llm_yes) + (p_gt_no * p_llm_no)
+
+    # Fórmula do Kappa com proteção contra divisão por zero
+    global_metrics['kappa'] = np.where(
+        global_metrics['p_e'] == 1.0, 
+        0.0, 
+        (global_metrics['p_o'] - global_metrics['p_e']) / (1 - global_metrics['p_e'])
+    )
+
+    
     global_metrics['precision'] = np.where(
         (global_metrics['tp'] + global_metrics['fp']) == 0, 0.0, 
         global_metrics['tp'] / (global_metrics['tp'] + global_metrics['fp'])
@@ -153,12 +183,19 @@ def calculate_metrics():
     )
 
     # Arredondamento para facilitar a leitura nos relatórios e artigos
-    cols_to_round = ['precision', 'recall', 'f1_score']
+    cols_to_round = ['precision', 'recall', 'f1_score', 'kappa']
     global_metrics[cols_to_round] = global_metrics[cols_to_round].round(4)
+
+    # Seleciona as colunas de forma limpa para exportação, incluindo o TN e os totais
+    cols_to_export = [
+        'model', 'strategy', 'total_processed_items', 
+        'tp', 'fp', 'fn', 'tn', 
+        'precision', 'recall', 'f1_score', 'kappa'
+    ]
 
     # 6. Exportação das Métricas Finais
     final_metrics_path = Path('./experiment_results/final_metrics_fair_baseline.csv')
-    global_metrics.to_csv(final_metrics_path, index=False)
+    global_metrics[cols_to_export].to_csv(final_metrics_path, index=False)
 
 
 def encode_image_for_opeanai(image_path: str) -> str:
@@ -173,3 +210,6 @@ def encode_image_for_opeanai(image_path: str) -> str:
         mime_type = "image/jpeg"
         
     return f"data:{mime_type};base64,{encoded_string}"
+
+if __name__=="__main__":
+    calculate_metrics()
