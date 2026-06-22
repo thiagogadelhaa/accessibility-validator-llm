@@ -4,6 +4,7 @@ import base64
 import mimetypes
 
 import pandas as pd
+import numpy as np
 from pathlib import Path
 from typing import Set, List, Tuple
 from bs4 import BeautifulSoup
@@ -116,17 +117,48 @@ def sanitize_html_for_llm(html_content: str) -> str:
 
 
 def calculate_metrics():
-    df = pd.read_csv("./experiment_results/metrics_output.csv")
+    df = pd.read_csv("./experiment_results/metrics_output_final.csv")
 
-    # Agrupamento e soma dos valores brutos
-    global_metrics = df.groupby(['model', 'strategy'])[['tp', 'fp', 'fn']].sum().reset_index()
-
+    error_mask = df['error'].astype(str).str.startswith("Error code: 400", na=False)
     
-    global_metrics['precision'] = global_metrics['tp'] / (global_metrics['tp'] + global_metrics['fp'])
-    global_metrics['recall'] = global_metrics['tp'] / (global_metrics['tp'] + global_metrics['fn'])
-    global_metrics['f1_score'] = (2 * global_metrics['precision'] * global_metrics['recall']) / (global_metrics['precision'] + global_metrics['recall'])
+    # Extrai a lista de IDs únicos onde o limite de tokens foi excedido
+    failed_item_ids = df[error_mask]['item_id'].unique()
+    
+    # Exportação para a Seção de Limitações do Artigo
+    if len(failed_item_ids) > 0:
+        dropped_output_path = Path('./experiment_results/dropped_items_limitations.csv')
+        dropped_df = pd.DataFrame({'failed_item_id': failed_item_ids})
+        dropped_df.to_csv(dropped_output_path, index=False)
 
-    global_metrics.to_csv('./experiment_results/final_metrics.csv')
+    # Mantém no cálculo apenas os registros que não fazem parte da lista de falhas
+    clean_df = df[~df['item_id'].isin(failed_item_ids)].copy()
+
+    # 4. Agrupamento e soma dos valores brutos sobre o dataset estabilizado
+    global_metrics = clean_df.groupby(['model', 'strategy'])[['tp', 'fp', 'fn']].sum().reset_index()
+
+    # 5. Cálculo de Métricas com Segurança (Evita Divisão por Zero)
+    global_metrics['precision'] = np.where(
+        (global_metrics['tp'] + global_metrics['fp']) == 0, 0.0, 
+        global_metrics['tp'] / (global_metrics['tp'] + global_metrics['fp'])
+    )
+    
+    global_metrics['recall'] = np.where(
+        (global_metrics['tp'] + global_metrics['fn']) == 0, 0.0, 
+        global_metrics['tp'] / (global_metrics['tp'] + global_metrics['fn'])
+    )
+    
+    global_metrics['f1_score'] = np.where(
+        (global_metrics['precision'] + global_metrics['recall']) == 0, 0.0, 
+        (2 * global_metrics['precision'] * global_metrics['recall']) / (global_metrics['precision'] + global_metrics['recall'])
+    )
+
+    # Arredondamento para facilitar a leitura nos relatórios e artigos
+    cols_to_round = ['precision', 'recall', 'f1_score']
+    global_metrics[cols_to_round] = global_metrics[cols_to_round].round(4)
+
+    # 6. Exportação das Métricas Finais
+    final_metrics_path = Path('./experiment_results/final_metrics_fair_baseline.csv')
+    global_metrics.to_csv(final_metrics_path, index=False)
 
 
 def encode_image_for_opeanai(image_path: str) -> str:
